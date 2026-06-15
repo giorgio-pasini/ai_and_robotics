@@ -1,4 +1,3 @@
-# robot_1m.py
 # =============================================================================
 #  Robot Maqueen Plus + micro:bit (MicroPython)
 #  Maintien de position par regulateur PID (Proportionnel + Integral + Derive).
@@ -27,7 +26,7 @@ KD = 30.0
 # --- Limites moteur ----------------------------------------------------------
 MAX_SPEED = 110
 MIN_SPEED = 40
-LOOP_MS   = 20
+LOOP_MS   = 15      # periode de la boucle (ms) : plus petit = plus reactif
 
 # =============================================================================
 #  Communication I2C (adresse 0x10)
@@ -48,18 +47,16 @@ def clear_encoders():
     i2c.write(ADDR, bytes([0x04, 0, 0, 0, 0]))   # remet 0x04..0x07 a zero
 
 # =============================================================================
-#  Suivi de position : magnitude d'encodeur signee par la direction lue
+#  Suivi de position
+#  L'encodeur (0x04/0x06) ne donne qu'une magnitude : il faut le signer avec le
+#  sens de rotation lu dans le registre de direction (0x00/0x02 : 1 avant,
+#  2 arriere). On accumule ainsi la position, meme quand le robot est pousse.
 # =============================================================================
-prev_g = 0; prev_d = 0
-pos_g  = 0; pos_d  = 0
-last_sign_g = 1; last_sign_d = 1     # sens retenu quand le moteur est a l'arret
-
-def _sign(direction, fallback):
-    if direction == FORWARD:  return 1
-    if direction == BACKWARD: return -1
-    return fallback                  # arret : on garde le dernier sens connu
+prev_g = 0; prev_d = 0       # dernieres valeurs d'encodeur
+pos_g  = 0; pos_d  = 0       # position cumulee, signee (counts)
 
 def reset_pos():
+    # remet les encodeurs et la position a zero
     global prev_g, prev_d, pos_g, pos_d
     clear_encoders()
     sleep(5)
@@ -69,20 +66,20 @@ def reset_pos():
     pos_g = 0; pos_d = 0
 
 def update_pos():
-    global prev_g, prev_d, pos_g, pos_d, last_sign_g, last_sign_d
-    e = _read(0x04, 4)               # encodeurs (magnitude)
+    global prev_g, prev_d, pos_g, pos_d
+    dirs = _read(0x00, 4)            # [dir_gauche, _, dir_droite, _]
+    e    = _read(0x04, 4)            # [encG_hi, encG_lo, encD_hi, encD_lo]
     g = (e[0] << 8) | e[1]
     d = (e[2] << 8) | e[3]
-    dirs = _read(0x00, 4)            # directions (octet0 gauche, octet2 droite)
-    sg = _sign(dirs[0], last_sign_g)
-    sd = _sign(dirs[2], last_sign_d)
-    if dirs[0] != STOP: last_sign_g = sg
-    if dirs[2] != STOP: last_sign_d = sd
-    pos_g += (g - prev_g) * sg
-    pos_d += (d - prev_d) * sd
+    # ajoute le deplacement de chaque roue, signe par son sens de rotation reel
+    if   dirs[0] == FORWARD:  pos_g += g - prev_g
+    elif dirs[0] == BACKWARD: pos_g -= g - prev_g
+    if   dirs[2] == FORWARD:  pos_d += d - prev_d
+    elif dirs[2] == BACKWARD: pos_d -= d - prev_d
     prev_g = g; prev_d = d
 
 def position_m():
+    # moyenne des deux roues, convertie en metres
     cpm = COUNTS_PER_METER if COUNTS_PER_METER > 0 else 1
     return (pos_g + pos_d) / 2.0 / cpm
 
