@@ -10,6 +10,8 @@
 #  maintient ; deplace a la main, il y revient. Nouvel appui : arret.
 # =============================================================================
 from microbit import i2c, sleep, running_time, button_a, button_b, display, Image
+from microbit import pin8, pin12
+import machine, utime
 
 # --- Calibration -------------------------------------------------------------
 COUNTS_PER_METER = 591      # counts d'encodeur correspondant a 1 metre
@@ -17,6 +19,17 @@ COUNTS_PER_METER = 591      # counts d'encodeur correspondant a 1 metre
 # --- Cible et tolerance ------------------------------------------------------
 TARGET_M    = 1.0
 TOLERANCE_M = 0.02
+
+# --- Capteur ultrason URM10 --------------------------------------------------
+# ATTENTION : l'ultrason N'EST PAS sur le bus I2C (absent de la table du PDF).
+# Il se lit via deux broches de la micro:bit. Cablage Maqueen Plus V1
+# (doc MBT0021, Project 3) : fil VERT -> P8 (TRIG), fil BLEU -> P12 (ECHO),
+# fil ROUGE -> 3.3V, fil NOIR -> GND.
+# Portee URM10 : 5-300 cm (0 si > 300 cm), plus precis entre 20 et 80 cm.
+TRIG = pin8                # fil vert : broche de declenchement
+ECHO = pin12               # fil bleu : broche d'echo
+SAFE_DISTANCE_CM   = 20    # en dessous : obstacle -> on coupe l'avance
+ULTRASON_PERIOD_MS = 60    # on ne mesure pas a chaque boucle (mesure lente, ~30 ms)
 
 # --- Gains du PID ------------------------------------------------------------
 KP = 180.0
@@ -84,6 +97,22 @@ def position_m():
     return (pos_g + pos_d) / 2.0 / cpm
 
 # =============================================================================
+#  Capteur ultrason : distance de l'obstacle devant le robot
+#  Principe (temps de vol) : impulsion 10 us sur TRIG -> le capteur renvoie sur
+#  ECHO une impulsion dont la duree = temps aller-retour du son. 58 us = 1 cm.
+# =============================================================================
+def lire_distance_cm():
+    TRIG.write_digital(0)
+    utime.sleep_us(2)
+    TRIG.write_digital(1)
+    utime.sleep_us(10)
+    TRIG.write_digital(0)
+    duree = machine.time_pulse_us(ECHO, 1, 30000)   # timeout 30 ms
+    if duree <= 0:
+        return -1                                    # pas d'echo : rien en vue / hors portee
+    return duree / 58
+
+# =============================================================================
 #  Commande moteur : x > 0 avance, x < 0 recule
 # =============================================================================
 def clamp(v, lo, hi):
@@ -136,13 +165,36 @@ class PID:
 def maintenir_position(cible_m):
     reset_pos()
     pid = PID(KP, KI, KD)
+    distance = 999.0                    # derniere mesure ultrason connue (cm)
+    last_mesure = running_time()        # date de la derniere mesure
     while not (button_a.was_pressed() or button_b.was_pressed()):
         update_pos()
+
+        # Mesure ultrason de temps en temps seulement : la lecture peut bloquer
+        # jusqu'a 30 ms, ce qui perturberait la boucle PID (15 ms) si faite a
+        # chaque tour. On garde la derniere valeur valide entre deux mesures.
+        if running_time() - last_mesure >= ULTRASON_PERIOD_MS:
+            d = lire_distance_cm()
+            # d < 0 = pas d'echo = rien dans la portee = voie LIBRE (et non pas
+            # "obstacle"). On met alors une grande distance, sinon le robot
+            # resterait bloque sur la derniere valeur (ex. 12 cm) une fois
+            # l'obstacle retire dans une grande salle.
+            distance = d if d > 0 else 999.0
+            last_mesure = running_time()
+
         erreur = cible_m - position_m()
         if abs(erreur) <= TOLERANCE_M:
             stop()
             pid.reset(erreur)
             display.show(Image.YES)
+        elif erreur > 0 and distance <= SAFE_DISTANCE_CM:
+            # On voudrait avancer (cible devant) mais un obstacle est trop proche.
+            # On coupe les moteurs et on remet l'integrale a zero pour ne pas
+            # accumuler de commande pendant l'arret. On reprendra des que c'est
+            # degage. (erreur < 0 = il faut reculer : pas concerne par l'obstacle)
+            stop()
+            pid.reset(erreur)
+            display.show(Image.NO)
         else:
             moteur(applique_min(pid.update(erreur)))
             display.show(Image.ARROW_N)

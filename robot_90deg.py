@@ -8,41 +8,37 @@
 #  Pour tourner SUR PLACE : v = 0  ->  v_droite = -v_gauche
 #  (une roue avance, l'autre recule : le robot pivote autour de son centre).
 #
-#  Mesure de l'angle (odometrie), comme pour l'etape "1m" :
-#      theta = (pos_droite - pos_gauche) / WHEEL_BASE_COUNTS
+#  Mesure de l'angle (odometrie) :
+#      theta = (pos_droite - pos_gauche) / WHEEL_BASE_COUNTS   [radians]
 #  pos_* = somme des deplacements d'encodeur signes par la direction.
 #  WHEEL_BASE_COUNTS = entraxe exprime directement en counts d'encodeur.
 #
-#  Comportement : appuyer sur A ou B -> le robot tourne jusqu'a 90 deg puis
-#  maintient son cap ; tourne a la main, il y revient. Nouvel appui : arret.
+#  Comportement : A -> pivote de +90 deg (gauche) ; B -> pivote de -90 deg
+#  (droite). Le robot tourne, se stabilise sur la cible, puis s'arrete.
+#  Approche et reglages repris du programme "carre" du groupe (deja testes).
 # =============================================================================
 from microbit import i2c, sleep, running_time, button_a, button_b, display, Image
 import math
 
 # --- Calibration -------------------------------------------------------------
-# Entraxe exprime DIRECTEMENT en counts d'encodeur (une seule constante a regler).
-# Mathematiquement : WHEEL_BASE_COUNTS = COUNTS_PER_METER * entraxe_en_metres
-#                                      ~= 591 * 0.095 m  ~= 56.
-# Calibre sur CE robot : a 909 il faisait ~1450 deg pour une cible de 90 deg,
-# d'ou 909 * (90/1450) ~= 56. (La valeur 909 ne correspondait a aucune geometrie.)
-# A affiner -> procedure en bas du fichier.
-WHEEL_BASE_COUNTS = 72
+# Entraxe en counts d'encodeur (~ COUNTS_PER_METER * entraxe_m ~ 591 * 0.10 m).
+# Valeur testee sur ce robot par le groupe (cf. square_pattern.py).
+WHEEL_BASE_COUNTS = 59
 
 # --- Cible et tolerance ------------------------------------------------------
-TARGET_DEG  = 90.0
-TARGET_RAD  = TARGET_DEG * math.pi / 180.0
-TOLERANCE_RAD = 2.0 * math.pi / 180.0    # 2 deg : on considere le robot "en place"
+TURN_TARGET   = math.pi / 2     # 90 deg en radians
+TOLERANCE_RAD = 0.01            # ~0.57 deg : robot considere "sur la cible"
+STABLE_COUNT  = 5               # cycles consecutifs dans la tolerance avant d'arreter
 
-# --- Gains du PID (erreur exprimee en RADIANS, max ~1.57 pour 90 deg) --------
-#  Valeurs de rotation deja testees sur le robot (reprises de Giorgio).
-KP = 150.0
-KI = 4.0
-KD = 20.0
+# --- Gains du PID (rotation) -------------------------------------------------
+KP_ROT = 150.0
+KI_ROT = 4.0
+KD_ROT = 20.0
 
 # --- Limites moteur ----------------------------------------------------------
 MAX_SPEED = 110
-MIN_SPEED = 45     # rotation = plus de frottement qu'en ligne droite -> un peu plus haut
-LOOP_MS   = 15     # periode de la boucle (ms) : plus petit = plus reactif
+MIN_SPEED = 40
+LOOP_MS   = 15                  # periode de la boucle (ms)
 
 # =============================================================================
 #  Communication I2C (adresse 0x10)
@@ -64,11 +60,11 @@ def clear_encoders():
 
 # =============================================================================
 #  Suivi de position de chaque roue (counts signes)
-#  Identique a l'etape 1m : l'encodeur (0x04/0x06) ne donne qu'une magnitude,
-#  on le signe avec le sens lu dans le registre de direction (0x00/0x02).
+#  L'encodeur (0x04/0x06) ne donne qu'une magnitude ; on le signe avec le sens
+#  lu dans le registre de direction (0x00/0x02 : 1 avant, 2 arriere).
 # =============================================================================
-prev_g = 0; prev_d = 0       # dernieres valeurs d'encodeur
-pos_g  = 0; pos_d  = 0       # position cumulee, signee (counts)
+prev_g = 0; prev_d = 0
+pos_g  = 0; pos_d  = 0
 
 def reset_pos():
     global prev_g, prev_d, pos_g, pos_d
@@ -93,41 +89,34 @@ def update_pos():
 
 def angle_rad():
     # Modele unicycle : l'angle vient de la DIFFERENCE des deux roues.
-    # theta > 0  ->  rotation anti-horaire (roue droite en avant, gauche en arriere).
-    # WHEEL_BASE_COUNTS = entraxe deja exprime en counts -> une seule division.
+    # theta > 0 -> rotation anti-horaire (roue droite en avant, gauche en arriere).
     return (pos_d - pos_g) / float(WHEEL_BASE_COUNTS)
 
-def angle_deg():
-    return angle_rad() * 180.0 / math.pi
-
 # =============================================================================
-#  Commande de ROTATION sur place : x > 0 tourne a gauche (anti-horaire),
-#  x < 0 tourne a droite (horaire). On applique en miroir aux deux roues.
+#  Commande de ROTATION sur place
+#  w > 0 -> tourne a gauche (anti-horaire) : droite avance, gauche recule.
+#  w < 0 -> tourne a droite (horaire).
+#  Les commandes trop faibles sont relevees a MIN_SPEED (sinon le moteur cale).
 # =============================================================================
 def clamp(v, lo, hi):
     return max(lo, min(hi, v))
 
-def tourne(x):
-    x = clamp(x, -MAX_SPEED, MAX_SPEED)
-    if x >= 0:
-        # anti-horaire : droite avance, gauche recule
-        right_motor(FORWARD, int(x));   left_motor(BACKWARD, int(x))
+def moteur_pivot(w_cmd):
+    spd = int(clamp(abs(w_cmd), 0, MAX_SPEED))
+    if 0 < spd < MIN_SPEED:
+        spd = MIN_SPEED
+    if w_cmd >= 0:
+        left_motor(BACKWARD, spd); right_motor(FORWARD,  spd)
     else:
-        # horaire : droite recule, gauche avance
-        right_motor(BACKWARD, int(-x)); left_motor(FORWARD, int(-x))
-
-def applique_min(x):
-    if 0 < x < MIN_SPEED:   return MIN_SPEED
-    if -MIN_SPEED < x < 0:  return -MIN_SPEED
-    return x
+        left_motor(FORWARD,  spd); right_motor(BACKWARD, spd)
 
 # =============================================================================
-#  Regulateur PID (identique a l'etape 1m)
+#  Regulateur PID
 # =============================================================================
 class PID:
-    def __init__(self, kp, ki, kd):
+    def __init__(self, kp, ki, kd, max_speed=MAX_SPEED):
         self.kp, self.ki, self.kd = kp, ki, kd
-        self.i_max = MAX_SPEED / ki if ki > 0 else 0
+        self.i_max = max_speed / ki if ki > 0 else 0
         self.reset(0.0)
 
     def reset(self, error):
@@ -151,34 +140,48 @@ class PID:
         return p + i + d
 
 # =============================================================================
-#  Rotation puis maintien du cap
+#  Pivot sur place d'un angle donne (radians), avec confirmation de stabilite.
+#  On ne s'arrete que lorsque l'angle reste DANS la tolerance pendant
+#  STABLE_COUNT cycles consecutifs : evite de declarer "fini" en passant a
+#  pleine vitesse devant la cible.
+#  Retourne False si interrompu par un bouton.
 # =============================================================================
-def tourner_de(cible_rad):
+def pivoter(cible_rad):
     reset_pos()
-    pid = PID(KP, KI, KD)
+    pid = PID(KP_ROT, KI_ROT, KD_ROT)
+    display.show(Image.ARROW_W if cible_rad >= 0 else Image.ARROW_E)
+    stable = 0
     while not (button_a.was_pressed() or button_b.was_pressed()):
         update_pos()
         erreur = cible_rad - angle_rad()
         if abs(erreur) <= TOLERANCE_RAD:
             stop()
-            pid.reset(erreur)
-            display.show(Image.YES)
+            stable += 1
+            if stable >= STABLE_COUNT:     # vraiment stabilise sur la cible
+                display.show(Image.YES)
+                return True
         else:
-            tourne(applique_min(pid.update(erreur)))
-            # fleche indiquant le sens de correction en cours
-            display.show(Image.ARROW_W if erreur > 0 else Image.ARROW_E)
+            stable = 0                     # sorti de la zone -> on recommence a compter
+            moteur_pivot(pid.update(erreur))
         sleep(LOOP_MS)
     stop()
+    return False
 
 # =============================================================================
 #  Programme principal
+#  A -> pivote de +90 deg (gauche)   |   B -> pivote de -90 deg (droite)
 # =============================================================================
 set_internal_pid(False)
 stop()
 display.show(Image.ARROW_N)
 while True:
-    if button_a.was_pressed() or button_b.was_pressed():
-        tourner_de(TARGET_RAD)
+    if button_a.was_pressed():
+        pivoter(+TURN_TARGET)
+        sleep(300)
+        display.show(Image.ARROW_N)
+    elif button_b.was_pressed():
+        pivoter(-TURN_TARGET)
+        sleep(300)
         display.show(Image.ARROW_N)
     sleep(50)
 
