@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Maqueen RC</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;800&display=swap" rel="stylesheet">
+    <style>
+        *,
+        *::before,
+        *::after {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        :root {
+            --bg: #0D0F14;
+            --surface: #16191F;
+            --border: #2A2D35;
+            --blue: #3A7BD5;
+            --blue-glow: #3A7BD540;
+            --active: #E8F0FE;
+            --muted: #6B7280;
+            --danger: #C0392B;
+            --green: #27AE60;
+            --font: 'JetBrains Mono', monospace;
+        }
+
+        html,
+        body {
+            height: 100%;
+            background: var(--bg);
+            color: var(--active);
+            font-family: var(--font);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            user-select: none;
+            overflow: hidden;
+        }
+
+        .shell {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 36px;
+        }
+
+        .header {
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 11px;
+            letter-spacing: 0.3em;
+            text-transform: uppercase;
+            color: var(--muted);
+            margin-bottom: 6px;
+        }
+
+        .header .brand {
+            font-size: 22px;
+            font-weight: 800;
+            color: var(--active);
+            letter-spacing: -0.02em;
+        }
+
+        .header .brand span {
+            color: var(--blue);
+        }
+
+        .status-strip {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 11px;
+            letter-spacing: 0.15em;
+            text-transform: uppercase;
+        }
+
+        .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--danger);
+            transition: background 0.3s;
+            flex-shrink: 0;
+        }
+
+        .dot.on {
+            background: var(--green);
+            box-shadow: 0 0 8px #27AE6080;
+        }
+
+        #status-label {
+            color: var(--muted);
+            transition: color 0.3s;
+        }
+
+        #status-label.on {
+            color: var(--active);
+        }
+
+        .direction-wrap {
+            position: relative;
+            width: 160px;
+            height: 160px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .direction-ring {
+            position: absolute;
+            inset: 0;
+            border-radius: 50%;
+            border: 1px solid var(--border);
+            transition: border-color 0.15s, box-shadow 0.15s;
+        }
+
+        .direction-ring.pulse {
+            border-color: var(--blue);
+            box-shadow: 0 0 28px var(--blue-glow), inset 0 0 28px var(--blue-glow);
+        }
+
+        #dir-arrow {
+            font-size: 72px;
+            line-height: 1;
+            color: var(--muted);
+            transition: color 0.1s;
+        }
+
+        #dir-arrow.active {
+            color: var(--active);
+            text-shadow: 0 0 24px #3A7BD5aa;
+        }
+
+        .keys {
+            display: grid;
+            grid-template-columns: repeat(3, 56px);
+            grid-template-rows: repeat(2, 56px);
+            gap: 8px;
+        }
+
+        .key {
+            width: 56px;
+            height: 56px;
+            border-radius: 8px;
+            border: 1.5px solid var(--border);
+            background: var(--surface);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            color: var(--muted);
+            transition: background 0.08s, border-color 0.08s, color 0.08s, box-shadow 0.08s, transform 0.08s;
+            position: relative;
+        }
+
+        .key::after {
+            content: '';
+            position: absolute;
+            bottom: -4px;
+            left: 3px;
+            right: 3px;
+            height: 4px;
+            background: var(--border);
+            border-radius: 0 0 6px 6px;
+            transition: background 0.08s;
+        }
+
+        .key[data-key="ArrowUp"] {
+            grid-column: 2;
+            grid-row: 1;
+        }
+
+        .key[data-key="ArrowLeft"] {
+            grid-column: 1;
+            grid-row: 2;
+        }
+
+        .key[data-key="ArrowDown"] {
+            grid-column: 2;
+            grid-row: 2;
+        }
+
+        .key[data-key="ArrowRight"] {
+            grid-column: 3;
+            grid-row: 2;
+        }
+
+        .key.pressed {
+            background: var(--blue);
+            border-color: var(--blue);
+            color: #fff;
+            box-shadow: 0 0 16px var(--blue-glow);
+            transform: translateY(2px);
+        }
+
+        .key.pressed::after {
+            background: #2860b0;
+        }
+
+        .speed-wrap {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .speed-label {
+            font-size: 10px;
+            letter-spacing: 0.2em;
+            text-transform: uppercase;
+            color: var(--muted);
+        }
+
+        .speed-bar-track {
+            width: 168px;
+            height: 4px;
+            background: var(--border);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        .speed-bar-fill {
+            height: 100%;
+            background: var(--blue);
+            border-radius: 2px;
+            transition: width 0.2s;
+            width: 47%;
+        }
+
+        .speed-value {
+            font-size: 11px;
+            color: var(--muted);
+        }
+
+        .btn-connect {
+            font-family: var(--font);
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.2em;
+            text-transform: uppercase;
+            background: transparent;
+            color: var(--blue);
+            border: 1.5px solid var(--blue);
+            border-radius: 6px;
+            padding: 10px 28px;
+            cursor: pointer;
+            transition: background 0.2s, color 0.2s;
+        }
+
+        .btn-connect:hover {
+            background: var(--blue);
+            color: #fff;
+        }
+
+        .btn-connect:disabled {
+            border-color: var(--border);
+            color: var(--muted);
+            cursor: default;
+        }
+
+        .btn-connect:disabled:hover {
+            background: transparent;
+            color: var(--muted);
+        }
+
+        .hint {
+            font-size: 10px;
+            color: var(--border);
+            letter-spacing: 0.12em;
+            text-align: center;
+            line-height: 1.8;
+        }
+
+        .hint b {
+            color: var(--muted);
+        }
+    </style>
+</head>
+
+<body>
+    <div class="shell">
+        <div class="header">
+            <h1>Radio Remote · Web Serial</h1>
+            <div class="brand">Maqueen<span>RC</span></div>
+        </div>
+        <div class="status-strip">
+            <div class="dot" id="dot"></div>
+            <span id="status-label">disconnected</span>
+        </div>
+        <div class="direction-wrap">
+            <div class="direction-ring" id="ring"></div>
+            <div id="dir-arrow">·</div>
+        </div>
+        <div class="keys">
+            <div class="key" data-key="ArrowUp">↑</div>
+            <div class="key" data-key="ArrowLeft">←</div>
+            <div class="key" data-key="ArrowDown">↓</div>
+            <div class="key" data-key="ArrowRight">→</div>
+        </div>
+        <div class="speed-wrap">
+            <div class="speed-label">speed</div>
+            <div class="speed-bar-track">
+                <div class="speed-bar-fill" id="speed-fill"></div>
+            </div>
+            <div class="speed-value" id="speed-val">120 / 200</div>
+        </div>
+        <button class="btn-connect" id="btn">Connect dongle</button>
+        <div class="hint">
+            <b>↑ ↓ ← →</b> drive &nbsp;|&nbsp; <b>+ −</b> speed<br>
+            plug dongle micro:bit via USB · Chrome or Edge only
+        </div>
+    </div>
+    <script>
+        const BAUD = 115200;
+        const ARROWS = {
+            ArrowUp: { cmd: 'F', arrow: '↑' },
+            ArrowDown: { cmd: 'B', arrow: '↓' },
+            ArrowLeft: { cmd: 'L', arrow: '←' },
+            ArrowRight: { cmd: 'R', arrow: '→' },
+        };
+        const MAX_SPEED = 200, MIN_SPEED = 40;
+        let speed = 120, writer = null, connected = false, heldKey = null, sendLoop = null;
+
+        const dot = document.getElementById('dot');
+        const label = document.getElementById('status-label');
+        const arrowEl = document.getElementById('dir-arrow');
+        const ring = document.getElementById('ring');
+        const btn = document.getElementById('btn');
+        const speedFill = document.getElementById('speed-fill');
+        const speedVal = document.getElementById('speed-val');
+        const keyCaps = {};
+        document.querySelectorAll('.key').forEach(el => keyCaps[el.dataset.key] = el);
+
+        function setStatus(isOn, text) {
+            dot.className = 'dot' + (isOn ? ' on' : '');
+            label.className = isOn ? 'on' : '';
+            label.textContent = text;
+        }
+        function showDirection(key) {
+            const info = key ? ARROWS[key] : null;
+            arrowEl.textContent = info ? info.arrow : '·';
+            arrowEl.className = info ? 'active' : '';
+            ring.className = info ? 'direction-ring pulse' : 'direction-ring';
+        }
+        function updateSpeedUI() {
+            const pct = ((speed - MIN_SPEED) / (MAX_SPEED - MIN_SPEED) * 100).toFixed(0);
+            speedFill.style.width = pct + '%';
+            speedVal.textContent = speed + ' / ' + MAX_SPEED;
+        }
+        function pressKey(k) { if (keyCaps[k]) keyCaps[k].classList.add('pressed'); }
+        function releaseKey(k) { if (keyCaps[k]) keyCaps[k].classList.remove('pressed'); }
+
+        async function send(cmd) {
+            if (!connected || !writer) return;
+            try { await writer.write(new TextEncoder().encode(cmd)); }
+            catch (e) { console.warn('Serial write failed:', e); }
+        }
+
+        function startDriving(key) {
+            if (!connected || heldKey === key) return;
+            if (heldKey) stopDriving();
+            heldKey = key;
+            pressKey(key);
+            showDirection(key);
+            send(ARROWS[key].cmd);
+            sendLoop = setInterval(() => send(ARROWS[key].cmd), 200);
+        }
+
+        function stopDriving() {
+            if (!heldKey) return;
+            clearInterval(sendLoop);
+            sendLoop = null;
+            releaseKey(heldKey);
+            heldKey = null;
+            showDirection(null);
+            send('S');
+        }
+
+        document.addEventListener('keydown', e => {
+            if (!connected || e.repeat) return;
+            if (ARROWS[e.key]) { e.preventDefault(); startDriving(e.key); }
+            else if (e.key === '+' || e.key === '=') { speed = Math.min(MAX_SPEED, speed + 20); updateSpeedUI(); send('+'); }
+            else if (e.key === '-') { speed = Math.max(MIN_SPEED, speed - 20); updateSpeedUI(); send('-'); }
+        });
+        document.addEventListener('keyup', e => {
+            if (ARROWS[e.key] && heldKey === e.key) { e.preventDefault(); stopDriving(); }
+        });
+        window.addEventListener('blur', () => { if (connected) stopDriving(); });
+
+        btn.addEventListener('click', async () => {
+            if (connected) {
+                stopDriving();
+                try { await writer.close(); } catch (_) { }
+                writer = null; connected = false;
+                setStatus(false, 'disconnected');
+                btn.textContent = 'Connect dongle';
+                showDirection(null);
+                return;
+            }
+            if (!navigator.serial) {
+                alert('Web Serial is not supported.\nUse Chrome or Edge — and open this file via a local server or drag it into the browser address bar directly.');
+                return;
+            }
+            try {
+                btn.disabled = true;
+                setStatus(false, 'connecting…');
+                const port = await navigator.serial.requestPort();
+                await port.open({ baudRate: BAUD });
+                writer = port.writable.getWriter();
+                connected = true;
+                setStatus(true, 'dongle connected');
+                btn.textContent = 'Disconnect';
+                btn.disabled = false;
+                updateSpeedUI();
+                port.addEventListener('disconnect', () => {
+                    connected = false; writer = null;
+                    stopDriving();
+                    setStatus(false, 'disconnected');
+                    btn.textContent = 'Connect dongle';
+                    showDirection(null);
+                });
+            } catch (e) {
+                setStatus(false, 'disconnected');
+                btn.disabled = false;
+                btn.textContent = 'Connect dongle';
+                if (e.name !== 'NotFoundError') console.error(e);
+            }
+        });
+
+        updateSpeedUI();
+    </script>
+</body>
+
+</html>

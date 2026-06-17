@@ -26,10 +26,18 @@ import radio
 ADDR = 0x10
 STOP, FORWARD, BACKWARD = 0, 1, 2
 
-def left_motor(direction, speed):  i2c.write(ADDR, bytes([0x00, direction, speed]))
-def right_motor(direction, speed): i2c.write(ADDR, bytes([0x02, direction, speed]))
+def _ecrire(data):
+    # Ecriture I2C "blindee" : un glitch passager (OSError) ne doit PAS tuer
+    # le programme (sinon l'ecran affiche "Line X / error" et le robot se fige).
+    try:
+        i2c.write(ADDR, bytes(data))
+    except OSError:
+        pass
+
+def left_motor(direction, speed):  _ecrire([0x00, direction, speed])
+def right_motor(direction, speed): _ecrire([0x02, direction, speed])
 def stop():                        left_motor(STOP, 0); right_motor(STOP, 0)
-def set_internal_pid(on):          i2c.write(ADDR, bytes([0x0A, 1 if on else 0]))
+def set_internal_pid(on):          _ecrire([0x0A, 1 if on else 0])
 
 # =============================================================================
 #  >>> LES 2 SEULS REGLAGES A TOUCHER (avec le MODE TEST, bouton B) <<<
@@ -63,6 +71,9 @@ radio.on()
 # =============================================================================
 #  Mouvements de base (utilises par le radio ET par le test)
 # =============================================================================
+# Petit point central : "lien radio vivant mais ordre = stop".
+POINT = Image("00000:00000:00900:00000:00000")
+
 def clamp(v):
     return max(0, min(255, v))
 
@@ -93,15 +104,15 @@ def appliquer(cmd, vitesse):
         tourner_gauche(vitesse); display.show(Image.ARROW_W)
     elif cmd == "R":
         tourner_droite(vitesse); display.show(Image.ARROW_E)
-    else:                        # "S" ou inconnu
-        stop();                  display.show(Image.SQUARE_SMALL)
+    else:                        # "S" ou inconnu : recu mais a l'arret
+        stop();                  display.show(POINT)
 
 # =============================================================================
 #  MODE RADIO -- pilotage par la telecommande (bouton B pour ressortir)
 # =============================================================================
 def mode_radio():
     stop()
-    display.show(Image.SQUARE_SMALL)
+    display.show(Image.NO)        # ✗ tant qu'on n'a rien recu
     dernier_recu = running_time()
     while not button_b.was_pressed():
         # On VIDE la file et on ne garde que le DERNIER message recu :
@@ -147,17 +158,18 @@ def mode_test():
     stop()
 
 # =============================================================================
-#  Programme principal : petit menu A / B
+#  Programme principal
+#  -> On demarre DIRECTEMENT en mode radio (pas de menu bloquant).
+#     Bouton B : passer en mode TEST.   Bouton A : revenir au mode radio.
+#
+#  Indications a l'ecran en mode radio (DEBUG reception) :
+#     ↑ ← →  = ordre recu (avancer / gauche / droite)
+#     point  = recu mais "stop" (le lien radio est vivant)
+#     ✗      = rien recu (probleme radio ou telecommande eteinte)
 # =============================================================================
 set_internal_pid(True)   # PID interne ON : plus de couple / vitesse reguliere
 stop()
-display.scroll("A=GO B=TEST", delay=70)
 
 while True:
-    if button_a.was_pressed():
-        mode_radio()
-        display.scroll("A=GO B=TEST", delay=70)
-    elif button_b.was_pressed():
-        mode_test()
-        display.scroll("A=GO B=TEST", delay=70)
-    sleep(50)
+    mode_radio()    # tourne jusqu'a l'appui sur B
+    mode_test()     # tourne jusqu'a l'appui sur A, puis on revient au radio
