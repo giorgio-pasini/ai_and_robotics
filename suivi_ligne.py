@@ -1,22 +1,25 @@
 # =============================================================================
 #  Robot Maqueen Plus + micro:bit (MicroPython)
-#  ETAPE 9 : SUIVI DE LIGNE -- avec les 2 CAPTEURS EXTERNES (L3 et R3) UNIQUEMENT.
+#  ETAPE 9 : SUIVI DE LIGNE -- avec 2 capteurs (paire CONFIGURABLE).
 #
-#  Idee : la ligne noire passe normalement ENTRE les deux capteurs externes
-#  (les plus ecartes). Tant que les deux voient du blanc, le robot est centre
-#  et va tout droit. Des qu'un capteur externe touche la ligne, c'est que le
-#  robot a derive de ce cote -> on braque vers la ligne (roue OPPOSEE acceleree).
+#  Idee : la ligne noire passe normalement ENTRE les deux capteurs choisis.
+#  Tant que les deux voient du blanc, le robot est centre et va tout droit.
+#  Des qu'un capteur touche la ligne, c'est que le robot a derive de ce cote
+#  -> on braque vers la ligne (roue OPPOSEE acceleree).
 #
-#     L3 et R3 sur le BLANC      -> robot centre        -> TOUT DROIT
-#     L3 (gauche) touche le NOIR -> ligne a gauche      -> TOURNER A GAUCHE
-#     R3 (droite) touche le NOIR -> ligne a droite      -> TOURNER A DROITE
-#     L3 et R3 sur le NOIR       -> croisement / ligne large -> TOUT DROIT
+#     gauche et droite sur le BLANC -> robot centre   -> TOUT DROIT
+#     capteur GAUCHE touche le NOIR -> ligne a gauche  -> TOURNER A GAUCHE
+#     capteur DROITE touche le NOIR -> ligne a droite  -> TOURNER A DROITE
+#     les deux sur le NOIR          -> croisement      -> TOUT DROIT
 #
-#  Les 4 autres capteurs (L2 L1 R1 R2) sont volontairement IGNORES.
+#  /!\ LE MAPPING DES BITS ET LES CAPTEURS QUI MARCHENT DEPENDENT DU ROBOT.
+#      Toujours lancer le mode TEST (bouton B) sur un nouveau robot.
+#      Sur CE robot : mapping inverse de l'ancien, et R3 est HS -> on utilise
+#      la paire L2 / R2.
 #
 #  Commandes :
 #   - Bouton A : demarre / arrete le suivi.
-#   - Bouton B : mode TEST -> montre l'etat des 2 capteurs externes (a faire d'abord).
+#   - Bouton B : mode TEST / diagnostic des 6 capteurs (a faire en premier).
 # =============================================================================
 from microbit import i2c, sleep, button_a, button_b, display
 
@@ -36,18 +39,30 @@ def stop():                        left_motor(STOP, 0); right_motor(STOP, 0)
 def set_internal_pid(on):          i2c.write(ADDR, bytes([0x0A, 1 if on else 0]))
 
 # =============================================================================
-#  Capteurs -- registre d'etat 0x1D. On n'utilise QUE les 2 externes :
-#      bit5 = 0x20 -> L3 (externe GAUCHE)
-#      bit0 = 0x01 -> R3 (externe DROITE)
+#  Capteurs -- registre d'etat 0x1D (1 octet, 1 bit par capteur).
 #
-#  POLARITE (verifiee au mode TEST) : sur ce robot, NOIR -> bit a 1, BLANC -> 0
-#  (conforme au PDF "1 pour du noir"). Si un jour les blocs s'allument a
-#  l'envers, change LIGNE_EST_BIT_0 (True <-> False).
+#  MAPPING DES BITS *POUR CE ROBOT* (verifie au diagnostic) :
+#      bit0 = 0x01 -> L3 (externe GAUCHE)   bit3 = 0x08 -> R1
+#      bit1 = 0x02 -> L2                     bit4 = 0x10 -> R2
+#      bit2 = 0x04 -> L1                     bit5 = 0x20 -> R3 (externe DROITE, HS)
+#  (Attention : un autre robot peut avoir l'ordre inverse -> re-tester.)
+#
+#  POLARITE : ici NOIR -> bit a 1, BLANC -> 0. Si l'affichage est inverse,
+#  change LIGNE_EST_BIT_0.
 # =============================================================================
-L3 = 0x20      # capteur externe gauche
-R3 = 0x01      # capteur externe droit
+L3, L2, L1 = 0x01, 0x02, 0x04
+R1, R2, R3 = 0x08, 0x10, 0x20
 
-LIGNE_EST_BIT_0 = False      # noir -> bit a 1 (comme le PDF)
+# Tous les capteurs, ordre physique gauche -> droite (pour le diagnostic).
+TOUS = (("L3", L3), ("L2", L2), ("L1", L1), ("R1", R1), ("R2", R2), ("R3", R3))
+
+LIGNE_EST_BIT_0 = False      # noir -> bit a 1
+
+# --- PAIRE DE CAPTEURS UTILISEE POUR LE SUIVI --------------------------------
+# R3 est HS sur ce robot : on prend une paire symetrique qui fonctionne.
+# (Tu peux mettre L3/R3 si les deux externes marchent, ou L1/R1 pour plus serre.)
+CAPTEUR_GAUCHE = L2
+CAPTEUR_DROITE = R2
 
 def lire_capteurs():
     return _read(0x1D, 1)[0]
@@ -60,28 +75,50 @@ def sur_la_ligne(etat, bit):
     return bit_allume            # noir = bit a 1
 
 # =============================================================================
-#  Vitesses (a ajuster). Comme les capteurs externes detectent la derive
-#  TARD (ligne deja loin), on braque FORT : roue interieure tres lente.
+#  Filtre anti-glitch (resilience aux ombres / reflets passagers)
+#  On ne change l'etat "vu / pas vu" d'un capteur que s'il reste pareil pendant
+#  N lectures de suite. Une ombre qui ne dure qu'une lecture est donc ignoree.
 # =============================================================================
-RAPIDE = 55      # roue exterieure / marche tout droit (baisse: evite de depasser)
+class Filtre:
+    def __init__(self, n=3):
+        self.n = n           # nb de lectures concordantes pour basculer
+        self.etat = False    # etat "stable" courant
+        self.compte = 0      # depuis combien de lectures la nouvelle valeur dure
+
+    def maj(self, lecture):
+        if lecture != self.etat:
+            self.compte += 1
+            if self.compte >= self.n:
+                self.etat = lecture
+                self.compte = 0
+        else:
+            self.compte = 0
+        return self.etat
+
+# =============================================================================
+#  Vitesses (a ajuster)
+# =============================================================================
+RAPIDE = 55      # roue exterieure / marche tout droit
 LENT   = 8       # roue interieure dans un virage (braquage serre)
 LOOP_MS = 5      # on relit les capteurs tres souvent
 
 # =============================================================================
-#  Boucle de suivi de ligne -- 2 capteurs externes
+#  Boucle de suivi de ligne -- 2 capteurs (avec filtre anti-glitch)
 # =============================================================================
 def suivre_ligne():
+    fg = Filtre(3)
+    fd = Filtre(3)
     while not button_a.was_pressed():
         etat = lire_capteurs()
-        gauche = sur_la_ligne(etat, L3)     # ligne sous l'externe GAUCHE ?
-        droite = sur_la_ligne(etat, R3)     # ligne sous l'externe DROIT ?
+        gauche = fg.maj(sur_la_ligne(etat, CAPTEUR_GAUCHE))   # ligne a gauche ?
+        droite = fd.maj(sur_la_ligne(etat, CAPTEUR_DROITE))   # ligne a droite ?
 
         if gauche and not droite:
-            # Ligne touchee a GAUCHE -> tourner a gauche (roue gauche lente).
+            # Ligne a GAUCHE -> tourner a gauche (roue gauche lente).
             left_motor(FORWARD, LENT)
             right_motor(FORWARD, RAPIDE)
         elif droite and not gauche:
-            # Ligne touchee a DROITE -> tourner a droite (roue droite lente).
+            # Ligne a DROITE -> tourner a droite (roue droite lente).
             left_motor(FORWARD, RAPIDE)
             right_motor(FORWARD, LENT)
         else:
@@ -94,27 +131,34 @@ def suivre_ligne():
     stop()
 
 # =============================================================================
-#  Mode TEST : affiche SEULEMENT les 2 capteurs externes, en gros blocs.
-#   - bloc des 2 colonnes de GAUCHE  = L3
-#   - bloc des 2 colonnes de DROITE  = R3
-#  Passe du noir sous l'externe gauche -> le bloc gauche doit s'allumer (et lui
-#  seul). Sinon, change LIGNE_EST_BIT_0 en haut du fichier.
+#  Mode TEST / DIAGNOSTIC : verifie LES 6 CAPTEURS un par un.
+#
+#  Mode d'emploi :
+#   1. Branche la micro:bit en USB et ouvre la console serie (REPL) de l'editeur.
+#   2. Pose le robot sur le BLANC : la ligne doit etre [. . . . . .].
+#   3. Passe lentement du NOIR sous chaque capteur, de gauche a droite.
+#      -> le capteur correspondant doit passer a "#". S'il ne change JAMAIS,
+#         ce capteur est mort / sale / mal cable.
+#
+#  Ecran 5x5 : ligne du HAUT = capteurs GAUCHE (L3 L2 L1),
+#              ligne du BAS  = capteurs DROITE (R1 R2 R3).
 # =============================================================================
 def mode_test():
+    pos = {"L3": (0, 0), "L2": (1, 0), "L1": (2, 0),
+           "R1": (2, 4), "R2": (3, 4), "R3": (4, 4)}
     while not button_b.was_pressed():
         etat = lire_capteurs()
         display.clear()
-        if sur_la_ligne(etat, L3):              # bloc gauche (colonnes 0 et 1)
-            for x in (0, 1):
-                for y in range(5):
-                    display.set_pixel(x, y, 9)
-        if sur_la_ligne(etat, R3):              # bloc droit (colonnes 3 et 4)
-            for x in (3, 4):
-                for y in range(5):
-                    display.set_pixel(x, y, 9)
-        print("0x1D =", "{:06b}".format(etat & 0x3F),
-              " L3:", sur_la_ligne(etat, L3), " R3:", sur_la_ligne(etat, R3))
-        sleep(100)
+        ligne_txt = ""
+        for nom, bit in TOUS:
+            vu = sur_la_ligne(etat, bit)
+            ligne_txt += ("#" if vu else ".") + " "
+            if vu:
+                x, y = pos[nom]
+                display.set_pixel(x, y, 9)
+        print("L3 L2 L1 R1 R2 R3 =", ligne_txt, " (0x1D =",
+              "{:06b}".format(etat & 0x3F), ")")
+        sleep(150)
     display.clear()
 
 # =============================================================================
