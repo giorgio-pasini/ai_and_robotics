@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="fr">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Maqueen RC — clavier (Web Serial)</title>
+    <!--
+      Telecommande CLAVIER pour le robot Maqueen Plus, cote ORDI.
+      ============================================================
+      Pipeline : ce navigateur --(USB serie, Web Serial)--> micro:bit DONGLE
+                 (radio_dongle.py) --(radio groupe 77)--> robot (radio_robot.py).
+
+      Protocole envoye : "<lettre><vitesse3>\n", IDENTIQUE au robot.
+          F = avancer   B = reculer   L = gauche   R = droite   S = stop
+          ex : "F190\n", "L150\n", "S000\n"
+
+      COMMANDES :
+          Fleches  ou  W A S D   -> avancer / gauche / reculer / droite
+          + / -                  -> regler la vitesse par defaut
+          MAJ (Shift) maintenue  -> mode BURST (vitesse max 255) tant que tenu
+          (relacher la touche)   -> STOP immediat
+
+      /!\ Chrome ou Edge uniquement (Web Serial). Branche d'abord la micro:bit
+          dongle en USB, ouvre cette page, clique "Connecter le dongle".
+    -->
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        :root {
+            --bg:#0D0F14; --surface:#16191F; --border:#2A2D35; --blue:#3A7BD5;
+            --blue-glow:#3A7BD540; --active:#E8F0FE; --muted:#6B7280;
+            --danger:#C0392B; --green:#27AE60; --burst:#E67E22;
+            --font:'JetBrains Mono','SF Mono',Menlo,monospace;
+        }
+        html, body {
+            height:100%; background:var(--bg); color:var(--active);
+            font-family:var(--font); display:flex; align-items:center;
+            justify-content:center; user-select:none; overflow:hidden;
+        }
+        .shell { display:flex; flex-direction:column; align-items:center; gap:30px; }
+        .header { text-align:center; }
+        .header h1 {
+            font-size:11px; letter-spacing:0.3em; text-transform:uppercase;
+            color:var(--muted); margin-bottom:6px;
+        }
+        .header .brand { font-size:22px; font-weight:800; letter-spacing:-0.02em; }
+        .header .brand span { color:var(--blue); }
+        .status-strip {
+            display:flex; align-items:center; gap:10px; font-size:11px;
+            letter-spacing:0.15em; text-transform:uppercase;
+        }
+        .dot {
+            width:8px; height:8px; border-radius:50%; background:var(--danger);
+            transition:background .3s; flex-shrink:0;
+        }
+        .dot.on { background:var(--green); box-shadow:0 0 8px #27AE6080; }
+        #status-label { color:var(--muted); transition:color .3s; }
+        #status-label.on { color:var(--active); }
+        .direction-wrap {
+            position:relative; width:150px; height:150px; display:flex;
+            align-items:center; justify-content:center;
+        }
+        .direction-ring {
+            position:absolute; inset:0; border-radius:50%;
+            border:1px solid var(--border); transition:border-color .15s, box-shadow .15s;
+        }
+        .direction-ring.pulse {
+            border-color:var(--blue);
+            box-shadow:0 0 28px var(--blue-glow), inset 0 0 28px var(--blue-glow);
+        }
+        .direction-ring.burst {
+            border-color:var(--burst);
+            box-shadow:0 0 30px #E67E2255, inset 0 0 30px #E67E2255;
+        }
+        #dir-arrow { font-size:68px; line-height:1; color:var(--muted); transition:color .1s; }
+        #dir-arrow.active { color:var(--active); text-shadow:0 0 24px #3A7BD5aa; }
+        #dir-arrow.burst-active { color:var(--burst); text-shadow:0 0 24px #E67E22aa; }
+        .keys {
+            display:grid; grid-template-columns:repeat(3,52px);
+            grid-template-rows:repeat(2,52px); gap:8px;
+        }
+        .key {
+            width:52px; height:52px; border-radius:8px; border:1.5px solid var(--border);
+            background:var(--surface); display:flex; align-items:center;
+            justify-content:center; font-size:18px; color:var(--muted);
+            transition:all .08s; position:relative;
+        }
+        .key[data-k="F"] { grid-column:2; grid-row:1; }
+        .key[data-k="L"] { grid-column:1; grid-row:2; }
+        .key[data-k="B"] { grid-column:2; grid-row:2; }
+        .key[data-k="R"] { grid-column:3; grid-row:2; }
+        .key.pressed {
+            background:var(--blue); border-color:var(--blue); color:#fff;
+            box-shadow:0 0 16px var(--blue-glow); transform:translateY(2px);
+        }
+        .key.burst { background:var(--burst); border-color:var(--burst); box-shadow:0 0 16px #E67E2255; }
+        .speed-wrap { display:flex; flex-direction:column; align-items:center; gap:8px; }
+        .speed-label { font-size:10px; letter-spacing:0.2em; text-transform:uppercase; color:var(--muted); }
+        .speed-bar-track { width:168px; height:5px; background:var(--border); border-radius:3px; overflow:hidden; }
+        .speed-bar-fill { height:100%; background:var(--blue); border-radius:3px; transition:width .15s, background .15s; }
+        .speed-bar-fill.burst { background:var(--burst); }
+        .speed-value { font-size:11px; color:var(--muted); }
+        .speed-value b { color:var(--active); }
+        .btn-connect {
+            font-family:var(--font); font-size:11px; font-weight:600; letter-spacing:0.2em;
+            text-transform:uppercase; background:transparent; color:var(--blue);
+            border:1.5px solid var(--blue); border-radius:6px; padding:10px 28px;
+            cursor:pointer; transition:background .2s, color .2s;
+        }
+        .btn-connect:hover { background:var(--blue); color:#fff; }
+        .btn-connect:disabled { border-color:var(--border); color:var(--muted); cursor:default; }
+        .btn-connect:disabled:hover { background:transparent; color:var(--muted); }
+        .hint { font-size:10px; color:var(--muted); letter-spacing:0.1em; text-align:center; line-height:1.9; }
+        .hint b { color:var(--active); }
+    </style>
+</head>
+
+<body>
+    <div class="shell">
+        <div class="header">
+            <h1>Telecommande clavier · Web Serial</h1>
+            <div class="brand">Maqueen<span>RC</span></div>
+        </div>
+        <div class="status-strip">
+            <div class="dot" id="dot"></div>
+            <span id="status-label">deconnecte</span>
+        </div>
+        <div class="direction-wrap">
+            <div class="direction-ring" id="ring"></div>
+            <div id="dir-arrow">·</div>
+        </div>
+        <div class="keys">
+            <div class="key" data-k="F">↑</div>
+            <div class="key" data-k="L">←</div>
+            <div class="key" data-k="B">↓</div>
+            <div class="key" data-k="R">→</div>
+        </div>
+        <div class="speed-wrap">
+            <div class="speed-label" id="speed-label">vitesse</div>
+            <div class="speed-bar-track"><div class="speed-bar-fill" id="speed-fill"></div></div>
+            <div class="speed-value" id="speed-val"></div>
+        </div>
+        <button class="btn-connect" id="btn">Connecter le dongle</button>
+        <div class="hint">
+            <b>↑ ↓ ← →</b> ou <b>W A S D</b> piloter &nbsp;|&nbsp; <b>+ −</b> vitesse &nbsp;|&nbsp; <b>MAJ</b> burst<br>
+            branche la micro:bit dongle en USB · Chrome ou Edge uniquement
+        </div>
+    </div>
+
+    <script>
+        const BAUD = 115200;
+
+        // --- Reglages vitesse (vitesse par defaut ELEVEE) -------------------
+        const DEFAULT_SPEED = 220;   // vitesse de croisiere ELEVEE (mode match)
+        const MIN_SPEED = 80, MAX_SPEED = 255;
+        const STEP = 15;             // pas du +/-
+        const BURST_SPEED = 255;     // mode BURST (MAJ maintenue)
+        const RESEND_MS = 100;       // renvoi continu dense (robuste aux pertes radio en match)
+
+        // Touches -> commande robot (+ arrows + WASD)
+        const ARROWS = {
+            ArrowUp:    { cmd:'F', arrow:'↑' },
+            ArrowDown:  { cmd:'B', arrow:'↓' },
+            ArrowLeft:  { cmd:'L', arrow:'←' },
+            ArrowRight: { cmd:'R', arrow:'→' },
+            w: { cmd:'F', arrow:'↑' }, s: { cmd:'B', arrow:'↓' },
+            a: { cmd:'L', arrow:'←' }, d: { cmd:'R', arrow:'→' },
+        };
+
+        let speed = DEFAULT_SPEED, burst = false;
+        let writer = null, connected = false, heldCmd = null, sendLoop = null;
+
+        const $ = id => document.getElementById(id);
+        const dot = $('dot'), label = $('status-label'), arrowEl = $('dir-arrow');
+        const ring = $('ring'), btn = $('btn'), speedFill = $('speed-fill'), speedVal = $('speed-val');
+        const keyCaps = {};
+        document.querySelectorAll('.key').forEach(el => keyCaps[el.dataset.k] = el);
+
+        const effSpeed = () => burst ? BURST_SPEED : speed;
+        const frame = cmd => cmd + String(effSpeed()).padStart(3, '0') + "\n";  // "F190\n"
+
+        function setStatus(on, text) {
+            dot.className = 'dot' + (on ? ' on' : '');
+            label.className = on ? 'on' : '';
+            label.textContent = text;
+        }
+        function showDirection(cmd) {
+            const info = cmd ? ARROWS_BY_CMD[cmd] : null;
+            arrowEl.textContent = info ? info.arrow : '·';
+            arrowEl.className = info ? (burst ? 'burst-active' : 'active') : '';
+            ring.className = info ? ('direction-ring ' + (burst ? 'burst' : 'pulse')) : 'direction-ring';
+        }
+        const ARROWS_BY_CMD = { F:{arrow:'↑'}, B:{arrow:'↓'}, L:{arrow:'←'}, R:{arrow:'→'} };
+
+        function updateSpeedUI() {
+            const pct = ((effSpeed() - MIN_SPEED) / (MAX_SPEED - MIN_SPEED) * 100).toFixed(0);
+            speedFill.style.width = pct + '%';
+            speedFill.className = 'speed-bar-fill' + (burst ? ' burst' : '');
+            speedVal.innerHTML = burst
+                ? '<b>BURST</b> · ' + BURST_SPEED + ' / ' + MAX_SPEED
+                : '<b>' + speed + '</b> / ' + MAX_SPEED;
+        }
+
+        async function send(text) {
+            if (!connected || !writer) return;
+            try { await writer.write(new TextEncoder().encode(text)); }
+            catch (e) { console.warn('ecriture serie KO:', e); }
+        }
+
+        function startDriving(cmd) {
+            if (!connected || heldCmd === cmd) return;
+            if (heldCmd) stopDriving(false);
+            heldCmd = cmd;
+            if (keyCaps[cmd]) keyCaps[cmd].classList.add('pressed', burst ? 'burst' : 'pressed');
+            showDirection(cmd);
+            send(frame(cmd));
+            sendLoop = setInterval(() => send(frame(cmd)), RESEND_MS);   // renvoi continu (anti-watchdog robot)
+        }
+
+        function stopDriving(sendStop = true) {
+            if (!heldCmd) return;
+            clearInterval(sendLoop); sendLoop = null;
+            if (keyCaps[heldCmd]) keyCaps[heldCmd].classList.remove('pressed', 'burst');
+            heldCmd = null;
+            showDirection(null);
+            if (sendStop) send("S000\n");
+        }
+
+        document.addEventListener('keydown', e => {
+            if (!connected) return;
+            if (e.key === 'Shift' && !burst) { burst = true; updateSpeedUI(); if (heldCmd) { showDirection(heldCmd); if (keyCaps[heldCmd]) keyCaps[heldCmd].classList.add('burst'); } return; }
+            if (e.repeat) return;
+            const info = ARROWS[e.key];
+            if (info) { e.preventDefault(); startDriving(info.cmd); }
+            else if (e.key === '+' || e.key === '=') { speed = Math.min(MAX_SPEED, speed + STEP); updateSpeedUI(); }
+            else if (e.key === '-' || e.key === '_') { speed = Math.max(MIN_SPEED, speed - STEP); updateSpeedUI(); }
+        });
+        document.addEventListener('keyup', e => {
+            if (e.key === 'Shift') { burst = false; updateSpeedUI(); if (heldCmd) { showDirection(heldCmd); if (keyCaps[heldCmd]) keyCaps[heldCmd].classList.remove('burst'); } return; }
+            const info = ARROWS[e.key];
+            if (info && heldCmd === info.cmd) { e.preventDefault(); stopDriving(); }
+        });
+        window.addEventListener('blur', () => { if (connected) { burst = false; stopDriving(); updateSpeedUI(); } });
+
+        btn.addEventListener('click', async () => {
+            if (connected) {
+                stopDriving();
+                try { await writer.close(); } catch (_) {}
+                writer = null; connected = false;
+                setStatus(false, 'deconnecte'); btn.textContent = 'Connecter le dongle';
+                showDirection(null); return;
+            }
+            if (!navigator.serial) {
+                alert("Web Serial non supporte.\nUtilise Chrome ou Edge, et ouvre ce fichier via un petit serveur local (ex: python3 -m http.server) ou directement.");
+                return;
+            }
+            try {
+                btn.disabled = true; setStatus(false, 'connexion…');
+                const port = await navigator.serial.requestPort();
+                await port.open({ baudRate: BAUD });
+                writer = port.writable.getWriter();
+                connected = true;
+                setStatus(true, 'dongle connecte'); btn.textContent = 'Deconnecter';
+                btn.disabled = false; updateSpeedUI();
+                port.addEventListener('disconnect', () => {
+                    connected = false; writer = null; stopDriving(false);
+                    setStatus(false, 'deconnecte'); btn.textContent = 'Connecter le dongle';
+                    showDirection(null);
+                });
+            } catch (e) {
+                setStatus(false, 'deconnecte'); btn.disabled = false;
+                btn.textContent = 'Connecter le dongle';
+                if (e.name !== 'NotFoundError') console.error(e);
+            }
+        });
+
+        updateSpeedUI();
+    </script>
+</body>
+
+</html>

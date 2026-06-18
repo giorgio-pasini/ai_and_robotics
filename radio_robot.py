@@ -43,9 +43,18 @@ radio.on()
 ADDR         = 0x10
 WATCHDOG_MS  = 400    # securite : stop si rien recu depuis ce delai (ms)
 VITESSE_TEST = 150    # vitesse utilisee par le MODE TEST
-RATIO_VIRAGE = 0.40   # roue INTERIEURE en virage = 40% de la vitesse.
+RATIO_VIRAGE = 0.40   # roue INTERIEURE en virage en COURBE = 40% de la vitesse.
                       #   plus petit -> courbe plus SERREE (plus de courbure)
                       #   plus grand  -> courbe plus large (proche tout droit)
+
+# =============================================================================
+#  >>> MODE MATCH / PERFORMANCE <<<
+#  Pour la competition : on privilegie vitesse de pointe + reactivite.
+# =============================================================================
+PID_INTERNE  = False  # False = PUISSANCE BRUTE : + de vitesse de pointe et + reactif
+                      #         (recommande MATCH). True = vitesse regulee (+ droit, - rapide).
+VIRAGE_PIVOT = True   # True = virage SUR PLACE : reorientation instantanee (recommande MATCH).
+                      #        False = virage en COURBE (utilise RATIO_VIRAGE, conduite douce).
 
 # =============================================================================
 #  >>> LES 2 SEULS REGLAGES A TOUCHER (avec le MODE TEST, bouton B) <<<
@@ -99,14 +108,16 @@ def reculer(v):  set_motors(-v, -v)
 def stop():      set_motors(0,  0)
 
 def tourner_gauche(v):
-    # ARC a gauche : les 2 roues AVANCENT, la gauche (interieure) plus lente.
-    lent = int(v * RATIO_VIRAGE)
-    set_motors(lent, v)
+    if VIRAGE_PIVOT:
+        set_motors(-v, v)              # PIVOT sur place : reorientation rapide (match)
+    else:
+        set_motors(int(v * RATIO_VIRAGE), v)   # ARC : les 2 roues avancent, gauche plus lente
 
 def tourner_droite(v):
-    # ARC a droite : la droite (interieure) plus lente.
-    lent = int(v * RATIO_VIRAGE)
-    set_motors(v, lent)
+    if VIRAGE_PIVOT:
+        set_motors(v, -v)              # PIVOT sur place
+    else:
+        set_motors(v, int(v * RATIO_VIRAGE))   # ARC : droite plus lente
 
 def appliquer(cmd, vitesse):
     if   cmd == "F": avancer(vitesse);        display.show(Image.ARROW_N)
@@ -170,7 +181,7 @@ def mode_test():
 #  -> boot direct en mode radio.  B : mode TEST.  A : retour radio.
 #  Ecran (debug reception) : ^ v < >  = ordre recu / point = idle / X = rien.
 # =============================================================================
-set_internal_pid(True)
+set_internal_pid(PID_INTERNE)   # voir MODE MATCH : False = puissance brute (recommande)
 stop()
 
 while True:
