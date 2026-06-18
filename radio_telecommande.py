@@ -5,16 +5,18 @@
 #  A FLASHER SUR LA micro:bit TENUE EN MAIN.
 #
 #  COMMANDES :
-#     Bouton A              -> "L" tourner a GAUCHE (pivot)
-#     Bouton B              -> "R" tourner a DROITE (pivot)
-#     Boutons A + B         -> "F" AVANCER
-#     incliner vers l'AVANT -> "F" AVANCER
-#     incliner vers l'ARRIERE -> "B" RECULER
-#     rien                  -> "S" STOP
+#     incliner vers l'AVANT   -> "F" AVANCER   (vitesse = a quel point t'inclines)
+#     incliner vers l'ARRIERE -> "B" RECULER   (idem : plus tu penches, plus vite)
+#     Bouton A                -> "L" tourner a GAUCHE (arc)
+#     Bouton B                -> "R" tourner a DROITE (arc)
+#     Boutons A + B           -> "F" AVANCER A FOND (burst pleine vitesse)
+#     rien / a plat           -> "S" STOP
 #
-#  On envoie en CONTINU (toutes les 50 ms) : des que tu relaches, le robot
-#  s'arrete (le watchdog du robot coupe les moteurs ~400 ms apres le dernier
-#  message). Reaction en temps reel.
+#  >>> REGLAGE DE VITESSE : proportionnel a l'inclinaison <<<
+#  Penche un peu = lent, penche beaucoup = rapide. Plus besoin de vitesse fixe.
+#
+#  On envoie en CONTINU (toutes les 50 ms) : des que tu relaches / remets a plat,
+#  le robot s'arrete (watchdog du robot ~400 ms apres le dernier message).
 #
 #  /!\ channel + group DOIVENT etre IDENTIQUES a radio_robot.py.
 # =============================================================================
@@ -26,13 +28,28 @@ import radio
 # =============================================================================
 RADIO_CHANNEL = 7
 RADIO_GROUP   = 77
-radio.config(channel=RADIO_CHANNEL, group=RADIO_GROUP, power=7, queue=1, length=4)
+radio.config(channel=RADIO_CHANNEL, group=RADIO_GROUP, power=7, queue=1, length=8)
 radio.on()
 
 # =============================================================================
-#  Reglages
+#  Reglages vitesse / inclinaison  (accelerometre ~ -1024..1024)
 # =============================================================================
-SEUIL = 350   # inclinaison mini (accelerometre ~ -1024..1024) pour avancer/reculer
+SEUIL        = 200    # inclinaison mini pour commencer a bouger (zone morte a plat)
+TILT_MAX     = 750    # inclinaison consideree comme "a fond"
+VITESSE_MIN  = 110    # vitesse a l'inclinaison SEUIL (assez pour demarrer)
+VITESSE_MAX  = 245    # vitesse a l'inclinaison TILT_MAX (rapide)
+VITESSE_TOURNE = 175  # vitesse (roue exterieure) dans les virages A / B
+VITESSE_BURST  = 255  # A + B : avancer a fond
+
+def map_vitesse(tilt):
+    # |inclinaison| dans [SEUIL, TILT_MAX] -> vitesse dans [VITESSE_MIN, VITESSE_MAX]
+    if tilt > TILT_MAX:
+        tilt = TILT_MAX
+    frac = (tilt - SEUIL) / (TILT_MAX - SEUIL)
+    return int(VITESSE_MIN + frac * (VITESSE_MAX - VITESSE_MIN))
+
+def envoyer(cmd, vitesse):
+    radio.send(cmd + "{:03d}".format(vitesse))   # ex "F207"
 
 # =============================================================================
 #  Boucle principale
@@ -43,18 +60,18 @@ while True:
     y = accelerometer.get_y()
 
     if a and b:
-        cmd, img = "F", Image.ARROW_N        # A + B        -> AVANCER
+        cmd, v, img = "F", VITESSE_BURST, Image.ARROW_N      # A+B -> a fond
     elif a:
-        cmd, img = "L", Image.ARROW_W        # A            -> GAUCHE
+        cmd, v, img = "L", VITESSE_TOURNE, Image.ARROW_W     # A   -> gauche
     elif b:
-        cmd, img = "R", Image.ARROW_E        # B            -> DROITE
+        cmd, v, img = "R", VITESSE_TOURNE, Image.ARROW_E     # B   -> droite
     elif y < -SEUIL:
-        cmd, img = "F", Image.ARROW_N        # incline avant -> AVANCER
+        cmd, v, img = "F", map_vitesse(-y), Image.ARROW_N    # avant proportionnel
     elif y > SEUIL:
-        cmd, img = "B", Image.ARROW_S        # incline arriere -> RECULER
+        cmd, v, img = "B", map_vitesse(y), Image.ARROW_S     # arriere proportionnel
     else:
-        cmd, img = "S", Image.SQUARE_SMALL   # rien         -> STOP
+        cmd, v, img = "S", 0, Image.SQUARE_SMALL             # rien -> STOP
 
-    radio.send(cmd)
+    envoyer(cmd, v)
     display.show(img)
     sleep(50)        # 50 ms : reaction rapide (temps reel)

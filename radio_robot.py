@@ -10,16 +10,19 @@
 #                                le sens des moteurs.
 #     - Bouton A -> retour MODE RADIO.
 #
-#  Protocole radio : 1 SEUL caractere.
-#     "F" avancer   "B" reculer   "L" gauche   "R" droite   "S" stop
-#  (La vitesse vit ICI, sur le robot : SPEED. La telecommande n'envoie que
-#   la direction -> protocole minimal = plus robuste.)
+#  Protocole radio : 1 lettre (direction) + vitesse (3 chiffres).
+#     "F128" avancer  "B128" reculer  "L128" gauche  "R128" droite  "S000" stop
+#  La vitesse est calculee par la telecommande (proportionnelle a l'inclinaison)
+#  -> on peut accelerer/ralentir en temps reel.
+#
+#  Virages : en ARC (les 2 roues avancent, la roue interieure plus lente,
+#  cf. RATIO_VIRAGE) -> trajectoire courbe, pas un pivot sur place.
 #
 #  Techniques reprises de l'approche du camarade (approche_radio_x/) :
 #     - 1 seule ecriture I2C pour les 2 moteurs ([0x00, dG, vG, dD, vD]) ;
 #     - attente i2c.scan() au boot ;
 #     - radio.config(channel=..., power=7) pour une liaison fiable ;
-#     - set_motors(left, right) a vitesse SIGNEE -> virage sur place (pivot).
+#     - set_motors(left, right) a vitesse SIGNEE.
 # =============================================================================
 from microbit import display, Image, button_a, button_b, sleep, i2c, running_time
 import radio
@@ -29,7 +32,7 @@ import radio
 # =============================================================================
 RADIO_CHANNEL = 7
 RADIO_GROUP   = 77
-radio.config(channel=RADIO_CHANNEL, group=RADIO_GROUP, power=7, queue=3, length=4)
+radio.config(channel=RADIO_CHANNEL, group=RADIO_GROUP, power=7, queue=3, length=8)
 radio.on()
 
 # =============================================================================
@@ -37,10 +40,12 @@ radio.on()
 #     registres : 0x00 dir G | 0x01 vit G | 0x02 dir D | 0x03 vit D
 #     direction (PDF) : 0 = stop, 1 = avant, 2 = arriere
 # =============================================================================
-ADDR        = 0x10
-SPEED       = 130    # vitesse de croisiere envoyee aux moteurs (0-255)
-WATCHDOG_MS = 400    # securite : stop si rien recu depuis ce delai (ms)
-VITESSE_TEST = 120   # vitesse utilisee par le MODE TEST
+ADDR         = 0x10
+WATCHDOG_MS  = 400    # securite : stop si rien recu depuis ce delai (ms)
+VITESSE_TEST = 150    # vitesse utilisee par le MODE TEST
+RATIO_VIRAGE = 0.40   # roue INTERIEURE en virage = 40% de la vitesse.
+                      #   plus petit -> courbe plus SERREE (plus de courbure)
+                      #   plus grand  -> courbe plus large (proche tout droit)
 
 # =============================================================================
 #  >>> LES 2 SEULS REGLAGES A TOUCHER (avec le MODE TEST, bouton B) <<<
@@ -88,19 +93,27 @@ def set_motors(left, right):
     except OSError:
         pass
 
-# Mouvements de base (utilises par le radio ET par le test). Virages = pivot.
-def avancer(v=SPEED):       set_motors(v,  v)
-def reculer(v=SPEED):       set_motors(-v, -v)
-def tourner_gauche(v=SPEED): set_motors(-v, v)
-def tourner_droite(v=SPEED): set_motors(v, -v)
-def stop():                 set_motors(0, 0)
+# Mouvements de base (utilises par le radio ET par le test).
+def avancer(v):  set_motors(v,  v)
+def reculer(v):  set_motors(-v, -v)
+def stop():      set_motors(0,  0)
 
-def appliquer(cmd):
-    if   cmd == "F": avancer();       display.show(Image.ARROW_N)
-    elif cmd == "B": reculer();       display.show(Image.ARROW_S)
-    elif cmd == "L": tourner_gauche();display.show(Image.ARROW_W)
-    elif cmd == "R": tourner_droite();display.show(Image.ARROW_E)
-    else:            stop();          display.show(POINT)   # "S" ou inconnu
+def tourner_gauche(v):
+    # ARC a gauche : les 2 roues AVANCENT, la gauche (interieure) plus lente.
+    lent = int(v * RATIO_VIRAGE)
+    set_motors(lent, v)
+
+def tourner_droite(v):
+    # ARC a droite : la droite (interieure) plus lente.
+    lent = int(v * RATIO_VIRAGE)
+    set_motors(v, lent)
+
+def appliquer(cmd, vitesse):
+    if   cmd == "F": avancer(vitesse);        display.show(Image.ARROW_N)
+    elif cmd == "B": reculer(vitesse);        display.show(Image.ARROW_S)
+    elif cmd == "L": tourner_gauche(vitesse); display.show(Image.ARROW_W)
+    elif cmd == "R": tourner_droite(vitesse); display.show(Image.ARROW_E)
+    else:            stop();                  display.show(POINT)   # "S"/inconnu
 
 # =============================================================================
 #  MODE RADIO -- pilotage par la telecommande (bouton B pour ressortir).
@@ -119,7 +132,11 @@ def mode_radio():
             msg = radio.receive()
 
         if recent is not None:
-            appliquer(recent[0])
+            try:
+                vitesse = int(recent[1:])
+            except ValueError:
+                vitesse = 0
+            appliquer(recent[0], vitesse)
             dernier_recu = running_time()
         elif running_time() - dernier_recu > WATCHDOG_MS:
             stop()
