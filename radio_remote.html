@@ -151,10 +151,10 @@
         const BAUD = 115200;
 
         // --- Reglages vitesse (vitesse par defaut ELEVEE) -------------------
-        const DEFAULT_SPEED = 220;   // vitesse de croisiere ELEVEE (mode match)
+        const DEFAULT_SPEED = 255;   // vitesse MAX par defaut (mode match)
         const MIN_SPEED = 80, MAX_SPEED = 255;
         const STEP = 15;             // pas du +/-
-        const BURST_SPEED = 255;     // mode BURST (MAJ maintenue)
+        const BURST_SPEED = 190;     // MAJ maintenue -> vitesse reduite (precision)
         const RESEND_MS = 100;       // renvoi continu dense (robuste aux pertes radio en match)
 
         // Touches -> commande robot (+ arrows + WASD)
