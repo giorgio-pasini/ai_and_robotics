@@ -11,7 +11,8 @@
 #     - Bouton A -> retour MODE RADIO.
 #
 #  Protocole radio : 1 lettre (direction) + vitesse (3 chiffres).
-#     "F128" avancer  "B128" reculer  "L128" gauche  "R128" droite  "S000" stop
+#     "F128" avancer  "B128" reculer  "L128" pivot gauche  "R128" pivot droite
+#     "G128" AVANCER en COURBE gauche  "D128" AVANCER en COURBE droite  "S000" stop
 #  La vitesse est calculee par la telecommande (proportionnelle a l'inclinaison)
 #  -> on peut accelerer/ralentir en temps reel.
 #
@@ -119,11 +120,18 @@ def tourner_droite(v):
     else:
         set_motors(v, int(v * RATIO_VIRAGE))   # ARC : droite plus lente
 
+# COURBE : on AVANCE tout en tournant (les 2 roues en avant, l'interieure plus
+# lente via RATIO_VIRAGE). Independant de VIRAGE_PIVOT -> ne casse pas L / R.
+def courbe_gauche(v):  set_motors(int(v * RATIO_VIRAGE), v)
+def courbe_droite(v):  set_motors(v, int(v * RATIO_VIRAGE))
+
 def appliquer(cmd, vitesse):
     if   cmd == "F": avancer(vitesse);        display.show(Image.ARROW_N)
     elif cmd == "B": reculer(vitesse);        display.show(Image.ARROW_S)
     elif cmd == "L": tourner_gauche(vitesse); display.show(Image.ARROW_W)
     elif cmd == "R": tourner_droite(vitesse); display.show(Image.ARROW_E)
+    elif cmd == "G": courbe_gauche(vitesse);  display.show(Image.ARROW_NW)
+    elif cmd == "D": courbe_droite(vitesse);  display.show(Image.ARROW_NE)
     else:            stop();                  display.show(POINT)   # "S"/inconnu
 
 # =============================================================================

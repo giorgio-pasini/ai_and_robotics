@@ -59,18 +59,25 @@ while True:
     b = button_b.is_pressed()
     y = accelerometer.get_y()
 
+    fwd  = y < -SEUIL
+    back = y > SEUIL
+
     if a and b:
-        cmd, v, img = "F", VITESSE_BURST, Image.ARROW_N      # A+B -> a fond
+        cmd, v, img = "F", VITESSE_BURST, Image.ARROW_N       # A+B        -> a fond
+    elif fwd and a:
+        cmd, v, img = "G", map_vitesse(-y), Image.ARROW_NW    # avant + A  -> COURBE gauche
+    elif fwd and b:
+        cmd, v, img = "D", map_vitesse(-y), Image.ARROW_NE    # avant + B  -> COURBE droite
     elif a:
-        cmd, v, img = "L", VITESSE_TOURNE, Image.ARROW_W     # A   -> gauche
+        cmd, v, img = "L", VITESSE_TOURNE, Image.ARROW_W      # A          -> pivot gauche
     elif b:
-        cmd, v, img = "R", VITESSE_TOURNE, Image.ARROW_E     # B   -> droite
-    elif y < -SEUIL:
-        cmd, v, img = "F", map_vitesse(-y), Image.ARROW_N    # avant proportionnel
-    elif y > SEUIL:
-        cmd, v, img = "B", map_vitesse(y), Image.ARROW_S     # arriere proportionnel
+        cmd, v, img = "R", VITESSE_TOURNE, Image.ARROW_E      # B          -> pivot droite
+    elif fwd:
+        cmd, v, img = "F", map_vitesse(-y), Image.ARROW_N     # avant proportionnel
+    elif back:
+        cmd, v, img = "B", map_vitesse(y), Image.ARROW_S      # arriere proportionnel
     else:
-        cmd, v, img = "S", 0, Image.SQUARE_SMALL             # rien -> STOP
+        cmd, v, img = "S", 0, Image.SQUARE_SMALL              # rien -> STOP
 
     envoyer(cmd, v)
     display.show(img)

@@ -12,14 +12,16 @@
                  (radio_dongle.py) --(radio groupe 77)--> robot (radio_robot.py).
 
       Protocole envoye : "<lettre><vitesse3>\n", IDENTIQUE au robot.
-          F = avancer   B = reculer   L = gauche   R = droite   S = stop
-          ex : "F190\n", "L150\n", "S000\n"
+          F = avancer   B = reculer   L = pivot gauche   R = pivot droite
+          G = avancer en COURBE gauche   D = avancer en COURBE droite   S = stop
+          ex : "F255\n", "G220\n", "S000\n"
 
       COMMANDES :
-          Fleches  ou  W A S D   -> avancer / gauche / reculer / droite
-          + / -                  -> regler la vitesse par defaut
-          MAJ (Shift) maintenue  -> mode BURST (vitesse max 255) tant que tenu
-          (relacher la touche)   -> STOP immediat
+          Fleches  ou  W A S D       -> avancer / pivot gauche / reculer / pivot droite
+          Avant + Gauche (ou Droite) -> COURBE : on continue d'avancer en tournant
+          + / -                      -> regler la vitesse par defaut
+          MAJ (Shift) maintenue      -> mode PRECISION (vitesse reduite) tant que tenu
+          (relacher la touche)       -> STOP immediat
 
       /!\ Chrome ou Edge uniquement (Web Serial). Branche d'abord la micro:bit
           dongle en USB, ouvre cette page, clique "Connecter le dongle".
@@ -142,7 +144,7 @@
         </div>
         <button class="btn-connect" id="btn">Connecter le dongle</button>
         <div class="hint">
-            <b>↑ ↓ ← →</b> ou <b>W A S D</b> piloter &nbsp;|&nbsp; <b>+ −</b> vitesse &nbsp;|&nbsp; <b>MAJ</b> burst<br>
+            <b>↑ ↓ ← →</b> / <b>W A S D</b> piloter &nbsp;|&nbsp; <b>↑ + ← / →</b> courbe &nbsp;|&nbsp; <b>+ −</b> vitesse &nbsp;|&nbsp; <b>MAJ</b> precision<br>
             branche la micro:bit dongle en USB · Chrome ou Edge uniquement
         </div>
     </div>
@@ -157,18 +159,19 @@
         const BURST_SPEED = 190;     // MAJ maintenue -> vitesse reduite (precision)
         const RESEND_MS = 100;       // renvoi continu dense (robuste aux pertes radio en match)
 
-        // Touches -> commande robot (+ arrows + WASD)
-        const ARROWS = {
-            ArrowUp:    { cmd:'F', arrow:'↑' },
-            ArrowDown:  { cmd:'B', arrow:'↓' },
-            ArrowLeft:  { cmd:'L', arrow:'←' },
-            ArrowRight: { cmd:'R', arrow:'→' },
-            w: { cmd:'F', arrow:'↑' }, s: { cmd:'B', arrow:'↓' },
-            a: { cmd:'L', arrow:'←' }, d: { cmd:'R', arrow:'→' },
+        // Touches clavier -> direction de base (fleches + WASD)
+        const DIR_TOKEN = {
+            ArrowUp:'UP', w:'UP', ArrowDown:'DOWN', s:'DOWN',
+            ArrowLeft:'LEFT', a:'LEFT', ArrowRight:'RIGHT', d:'RIGHT',
         };
+        // Commande radio -> fleche affichee
+        const CMD_ARROW = { F:'↑', B:'↓', L:'←', R:'→', G:'↖', D:'↗' };
+        // token direction -> cap a allumer (les 4 touches a l'ecran)
+        const TOKEN_CAP = { UP:'F', DOWN:'B', LEFT:'L', RIGHT:'R' };
 
-        let speed = DEFAULT_SPEED, burst = false;
-        let writer = null, connected = false, heldCmd = null, sendLoop = null;
+        const pressed = new Set();   // tokens direction actuellement tenus
+        let speed = DEFAULT_SPEED, precision = false;
+        let writer = null, connected = false, currentCmd = 'S', sendLoop = null;
 
         const $ = id => document.getElementById(id);
         const dot = $('dot'), label = $('status-label'), arrowEl = $('dir-arrow');
@@ -176,28 +179,47 @@
         const keyCaps = {};
         document.querySelectorAll('.key').forEach(el => keyCaps[el.dataset.k] = el);
 
-        const effSpeed = () => burst ? BURST_SPEED : speed;
-        const frame = cmd => cmd + String(effSpeed()).padStart(3, '0') + "\n";  // "F190\n"
+        const effSpeed = () => precision ? BURST_SPEED : speed;
+        const frame = cmd => cmd + String(effSpeed()).padStart(3, '0') + "\n";  // "F255\n"
 
         function setStatus(on, text) {
             dot.className = 'dot' + (on ? ' on' : '');
             label.className = on ? 'on' : '';
             label.textContent = text;
         }
-        function showDirection(cmd) {
-            const info = cmd ? ARROWS_BY_CMD[cmd] : null;
-            arrowEl.textContent = info ? info.arrow : '·';
-            arrowEl.className = info ? (burst ? 'burst-active' : 'active') : '';
-            ring.className = info ? ('direction-ring ' + (burst ? 'burst' : 'pulse')) : 'direction-ring';
+
+        // Combine les touches tenues en UNE commande robot.
+        // Avant + Gauche/Droite -> COURBE (G/D) : on continue d'avancer en tournant.
+        function computeCmd() {
+            const u = pressed.has('UP'), dn = pressed.has('DOWN'),
+                  l = pressed.has('LEFT'), r = pressed.has('RIGHT');
+            if (u && l) return 'G';   // avancer en courbe a gauche
+            if (u && r) return 'D';   // avancer en courbe a droite
+            if (u) return 'F';
+            if (dn) return 'B';
+            if (l) return 'L';        // pivot gauche (sur place)
+            if (r) return 'R';        // pivot droite
+            return 'S';
         }
-        const ARROWS_BY_CMD = { F:{arrow:'↑'}, B:{arrow:'↓'}, L:{arrow:'←'}, R:{arrow:'→'} };
+
+        function updateUI(cmd) {
+            const arrow = CMD_ARROW[cmd];
+            arrowEl.textContent = arrow || '·';
+            arrowEl.className = arrow ? (precision ? 'burst-active' : 'active') : '';
+            ring.className = arrow ? ('direction-ring ' + (precision ? 'burst' : 'pulse')) : 'direction-ring';
+            for (const k in keyCaps) keyCaps[k].classList.remove('pressed', 'burst');
+            pressed.forEach(t => {
+                const cap = keyCaps[TOKEN_CAP[t]];
+                if (cap) { cap.classList.add('pressed'); if (precision) cap.classList.add('burst'); }
+            });
+        }
 
         function updateSpeedUI() {
             const pct = ((effSpeed() - MIN_SPEED) / (MAX_SPEED - MIN_SPEED) * 100).toFixed(0);
             speedFill.style.width = pct + '%';
-            speedFill.className = 'speed-bar-fill' + (burst ? ' burst' : '');
-            speedVal.innerHTML = burst
-                ? '<b>BURST</b> · ' + BURST_SPEED + ' / ' + MAX_SPEED
+            speedFill.className = 'speed-bar-fill' + (precision ? ' burst' : '');
+            speedVal.innerHTML = precision
+                ? '<b>PRECISION</b> · ' + BURST_SPEED + ' / ' + MAX_SPEED
                 : '<b>' + speed + '</b> / ' + MAX_SPEED;
         }
 
@@ -207,48 +229,44 @@
             catch (e) { console.warn('ecriture serie KO:', e); }
         }
 
-        function startDriving(cmd) {
-            if (!connected || heldCmd === cmd) return;
-            if (heldCmd) stopDriving(false);
-            heldCmd = cmd;
-            if (keyCaps[cmd]) keyCaps[cmd].classList.add('pressed', burst ? 'burst' : 'pressed');
-            showDirection(cmd);
-            send(frame(cmd));
-            sendLoop = setInterval(() => send(frame(cmd)), RESEND_MS);   // renvoi continu (anti-watchdog robot)
-        }
-
-        function stopDriving(sendStop = true) {
-            if (!heldCmd) return;
-            clearInterval(sendLoop); sendLoop = null;
-            if (keyCaps[heldCmd]) keyCaps[heldCmd].classList.remove('pressed', 'burst');
-            heldCmd = null;
-            showDirection(null);
-            if (sendStop) send("S000\n");
+        // Recalcule la commande a partir des touches tenues et l'applique.
+        function refresh() {
+            const cmd = computeCmd();
+            currentCmd = cmd;
+            if (cmd === 'S') {
+                if (sendLoop) { clearInterval(sendLoop); sendLoop = null; }
+                send("S000\n");
+                updateUI('S');
+                return;
+            }
+            send(frame(cmd));                                              // envoi immediat = reactif
+            if (!sendLoop) sendLoop = setInterval(() => send(frame(currentCmd)), RESEND_MS);  // renvoi continu (anti-watchdog robot)
+            updateUI(cmd);
         }
 
         document.addEventListener('keydown', e => {
             if (!connected) return;
-            if (e.key === 'Shift' && !burst) { burst = true; updateSpeedUI(); if (heldCmd) { showDirection(heldCmd); if (keyCaps[heldCmd]) keyCaps[heldCmd].classList.add('burst'); } return; }
+            if (e.key === 'Shift') { if (!precision) { precision = true; updateSpeedUI(); updateUI(currentCmd); } return; }
             if (e.repeat) return;
-            const info = ARROWS[e.key];
-            if (info) { e.preventDefault(); startDriving(info.cmd); }
+            const tok = DIR_TOKEN[e.key];
+            if (tok) { e.preventDefault(); if (!pressed.has(tok)) { pressed.add(tok); refresh(); } }
             else if (e.key === '+' || e.key === '=') { speed = Math.min(MAX_SPEED, speed + STEP); updateSpeedUI(); }
             else if (e.key === '-' || e.key === '_') { speed = Math.max(MIN_SPEED, speed - STEP); updateSpeedUI(); }
         });
         document.addEventListener('keyup', e => {
-            if (e.key === 'Shift') { burst = false; updateSpeedUI(); if (heldCmd) { showDirection(heldCmd); if (keyCaps[heldCmd]) keyCaps[heldCmd].classList.remove('burst'); } return; }
-            const info = ARROWS[e.key];
-            if (info && heldCmd === info.cmd) { e.preventDefault(); stopDriving(); }
+            if (e.key === 'Shift') { precision = false; updateSpeedUI(); updateUI(currentCmd); return; }
+            const tok = DIR_TOKEN[e.key];
+            if (tok) { e.preventDefault(); if (pressed.delete(tok)) refresh(); }
         });
-        window.addEventListener('blur', () => { if (connected) { burst = false; stopDriving(); updateSpeedUI(); } });
+        window.addEventListener('blur', () => { if (connected) { pressed.clear(); precision = false; refresh(); updateSpeedUI(); } });
 
         btn.addEventListener('click', async () => {
             if (connected) {
-                stopDriving();
+                pressed.clear(); refresh();
                 try { await writer.close(); } catch (_) {}
                 writer = null; connected = false;
                 setStatus(false, 'deconnecte'); btn.textContent = 'Connecter le dongle';
-                showDirection(null); return;
+                updateUI('S'); return;
             }
             if (!navigator.serial) {
                 alert("Web Serial non supporte.\nUtilise Chrome ou Edge, et ouvre ce fichier via un petit serveur local (ex: python3 -m http.server) ou directement.");
@@ -263,9 +281,10 @@
                 setStatus(true, 'dongle connecte'); btn.textContent = 'Deconnecter';
                 btn.disabled = false; updateSpeedUI();
                 port.addEventListener('disconnect', () => {
-                    connected = false; writer = null; stopDriving(false);
+                    connected = false; writer = null; pressed.clear();
+                    if (sendLoop) { clearInterval(sendLoop); sendLoop = null; }
                     setStatus(false, 'deconnecte'); btn.textContent = 'Connecter le dongle';
-                    showDirection(null);
+                    updateUI('S');
                 });
             } catch (e) {
                 setStatus(false, 'deconnecte'); btn.disabled = false;
